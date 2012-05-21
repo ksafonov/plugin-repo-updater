@@ -28,8 +28,6 @@ public class PluginUpdater {
 
     private static final String REPO_URL = "http://plugins.intellij.net";
 
-    private static final int RETRY_COUNT = 3;
-
     private static class FormParam {
         public final boolean isFile;
         public String value;
@@ -49,23 +47,11 @@ public class PluginUpdater {
         HttpMethod createMethod();
     }
 
-    private static HttpMethod executeWithRetry(HttpClient c, MethodFactory methodFactory) throws IOException {
-        HttpMethod method = null;
-        for (int i = 0; i < RETRY_COUNT; i++) {
-            method = methodFactory.createMethod();
-            method.setFollowRedirects(false);
-            int responseCode = c.executeMethod(method);
-            if (responseCode != HttpStatus.SC_INTERNAL_SERVER_ERROR) {
-                break;
-            }
-        }
-        return method;
-    }
 
     private static List<String> loginAndGetOwnPluginsList(HttpClient httpClient, final String username, final String password) throws IOException {
-        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+        HttpMethodWrapper w = new HttpMethodWrapper(httpClient) {
             @Override
-            public HttpMethod createMethod() {
+            protected HttpMethod createMethod() {
                 PostMethod m = new PostMethod(REPO_URL + "/space/");
                 Collection<NameValuePair> postParams = new ArrayList<NameValuePair>();
                 postParams.add(new NameValuePair("action", "login"));
@@ -74,18 +60,22 @@ public class PluginUpdater {
                 m.setRequestBody(postParams.toArray(new NameValuePair[postParams.size()]));
                 return m;
             }
-        });
-        int responseCode = m.getStatusCode();
+        };
+
+        w.execute();
+
+        int responseCode = w.getStatusCode();
+
         if (responseCode != HttpStatus.SC_OK) {
             throw new IOException("Request failed with code " + responseCode);
         }
         // TODO check auth cookie?
-        String response = m.getResponseBodyAsString();
+        String response = w.getResponseBody();
         if (response.contains("Wrong login or password!")) {
             throw new BuildException("Login failed");
         }
         else {
-            Document document = parseHtml(new ByteArrayInputStream(response.getBytes()));
+            Document document = parseHtml(w.getResponseBody());
             try {
                 NodeList pluginNodes = XPathAPI.selectNodeList(document, "//td[@class=\"name_plugin\"]/a");
                 List<String> result = new ArrayList<String>(pluginNodes.getLength());
@@ -93,7 +83,7 @@ public class PluginUpdater {
                     Node pluginNode = pluginNodes.item(i);
                     Node href = pluginNode.getAttributes().getNamedItem("href");
                     if (href == null) {
-                        throw new BuildException("Failed to parse output");
+                        throw new BuildException("Failed to parse output: " + response);
                     }
                     String url = href.getNodeValue();
                     String marker = "id=";
@@ -102,20 +92,21 @@ public class PluginUpdater {
                 return result;
             }
             catch (TransformerException e) {
-                throw new BuildException("Failed to parse output: " + e.getMessage(), e);
+                throw new BuildException("Failed to parse output: " + e.getMessage() + ", response: " + response, e);
             }
         }
     }
 
     private static boolean checkPluginExistence(HttpClient httpClient, final String pluginId) throws IOException {
-        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+        HttpMethodWrapper w = new HttpMethodWrapper(httpClient) {
             @Override
-            public HttpMethod createMethod() {
+            protected HttpMethod createMethod() {
                 return new GetMethod(REPO_URL + "/plugin/?id=" + pluginId);
             }
-        });
+        };
 
-        int status = m.getStatusCode();
+        w.execute();
+        int status = w.getStatusCode();
         if (status == HttpStatus.SC_OK) {
             return true;
         }
@@ -128,16 +119,18 @@ public class PluginUpdater {
     }
 
     private static LinkedHashMap<String, FormParam> readCurrentValues(HttpClient httpClient, final String pluginId) throws IOException {
-        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+        HttpMethodWrapper w = new HttpMethodWrapper(httpClient) {
             @Override
-            public HttpMethod createMethod() {
+            protected HttpMethod createMethod() {
                 return new GetMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
             }
-        });
+        };
 
-        int status = m.getStatusCode();
+        w.execute();
+
+        int status = w.getStatusCode();
         if (status == HttpStatus.SC_OK) {
-            return readFormParams(m.getResponseBodyAsStream());
+            return readFormParams(w.getResponseBody());
         }
         else if (status == HttpStatus.SC_MOVED_PERMANENTLY) {
             throw new IOException("Authorization session invalid, please try again");
@@ -147,30 +140,30 @@ public class PluginUpdater {
         }
     }
 
-    private static Document parseHtml(InputStream is) {
+    private static Document parseHtml(String response) {
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             DocumentBuilder builder = factory.newDocumentBuilder();
-            return builder.parse(is);
+            return builder.parse(new ByteArrayInputStream(response.getBytes("UTF-8")));
         }
         catch (ParserConfigurationException e) {
-            throw new BuildException("Failed to parse HTML response: " + e.getMessage(), e);
+            throw new BuildException("Failed to parse HTML response: " + e.getMessage() + ", response: " + response, e);
         }
         catch (SAXException e) {
-            throw new BuildException("Failed to parse HTML response: " + e.getMessage(), e);
+            throw new BuildException("Failed to parse HTML response: " + e.getMessage() + ", response: " + response, e);
         }
         catch (IOException e) {
-            throw new BuildException("Failed to parse HTML response: " + e.getMessage(), e);
+            throw new BuildException("Failed to parse HTML response: " + e.getMessage() + ", response: " + response, e);
         }
     }
 
-    private static LinkedHashMap<String, FormParam> readFormParams(InputStream responseBody) {
+    private static LinkedHashMap<String, FormParam> readFormParams(String response) {
         LinkedHashMap<String, FormParam> result = new LinkedHashMap<String, FormParam>();
-        Document document = parseHtml(responseBody);
+        Document document = parseHtml(response);
         try {
             Node formNode = XPathAPI.selectSingleNode(document, "//form");
             if (formNode == null) {
-                throw new BuildException("Failed to parse HTML response: <form> element not found");
+                throw new BuildException("Failed to parse HTML response: <form> element not found: " + response);
             }
             NodeList inputNodes = XPathAPI.selectNodeList(formNode, "//input|//textarea|//select");
             for (int i = 0; i < inputNodes.getLength(); i++) {
@@ -249,7 +242,7 @@ public class PluginUpdater {
             }
         }
         catch (TransformerException e) {
-            throw new BuildException("Failed to parse HTML response", e);
+            throw new BuildException("Failed to parse HTML response: " + response, e);
         }
 
         return result;
@@ -289,38 +282,37 @@ public class PluginUpdater {
             }
         }
 
-        HttpMethod m;
+        HttpMethodWrapper w = new HttpMethodWrapper(c) {
+            @Override
+            protected HttpMethod createMethod() {
+                PostMethod m = new PostMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
+                m.setRequestEntity(new MultipartRequestEntity(parts.toArray(new Part[parts.size()]), m.getParams()));
+                return m;
+            }
+        };
+
         try {
-            m = executeWithRetry(c, new MethodFactory() {
-                @Override
-                public HttpMethod createMethod() {
-                    PostMethod m = new PostMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
-                    m.setRequestEntity(new MultipartRequestEntity(parts.toArray(new Part[parts.size()]), m.getParams()));
-                    return m;
-                }
-            });
+            w.execute();
         }
         catch (IOException e) {
             throw new BuildException("Failed to execute request: " + e.getMessage(), e);
         }
-        int responseCode = m.getStatusCode();
+        int responseCode = w.getStatusCode();
         if (responseCode == HttpStatus.SC_OK) {
             try {
-                Document document = parseHtml(m.getResponseBodyAsStream());
+                String response = w.getResponseBody();
+                Document document = parseHtml(response);
                 Node node = XPathAPI.selectSingleNode(document, "//p[@style=\"color:#ff0000;\"]");
                 if (node == null) {
-                    throw new BuildException("Request failed, and we failed to find the error message");
+                    throw new BuildException("Request failed, and we failed to find the error message, response: " + response);
                 }
                 String errorMessage = node.getTextContent();
                 if (!errorMessage.isEmpty()) {
                     throw new BuildException("Failed to update plugin: " + errorMessage.trim());
                 }
             }
-            catch (IOException e) {
-                throw new BuildException("Request failed, and we failed to parse the response: " + e.getMessage(), e);
-            }
             catch (TransformerException e) {
-                throw new BuildException("Request failed, and we failed to parse the response: " + e.getMessage(), e);
+                throw new BuildException("Request failed, and we failed to parse the response: " + e.getMessage() + ", response: " + w.getResponseBody(), e);
             }
         }
         else if (responseCode != HttpStatus.SC_MOVED_TEMPORARILY) {
@@ -372,8 +364,8 @@ public class PluginUpdater {
 //            newValues.put("docText", "use it like that!");
 //            newValues.put("source", "http://sources");
 //            newValues.put("notes", "These are some notes");
-//            newValues.put("file", "C:\\Projects\\test-plugin\\test-plugin.jar");
-            execute("7014", "foo", "bar", newValues);
+            newValues.put("file", "C:\\Projects\\test-plugin\\test-plugin.jar");
+            execute("7014", "ksafonov", "run29hAUls", newValues);
         }
         catch (BuildException e) {
             e.printStackTrace();
