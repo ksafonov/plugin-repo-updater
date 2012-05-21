@@ -1,10 +1,7 @@
 package com.jetbrains.pluginrepo;
 
 import com.sun.org.apache.xpath.internal.XPathAPI;
-import org.apache.commons.httpclient.HttpClient;
-import org.apache.commons.httpclient.HttpStatus;
-import org.apache.commons.httpclient.NameValuePair;
-import org.apache.commons.httpclient.ProxyHost;
+import org.apache.commons.httpclient.*;
 import org.apache.commons.httpclient.methods.GetMethod;
 import org.apache.commons.httpclient.methods.PostMethod;
 import org.apache.commons.httpclient.methods.multipart.*;
@@ -31,6 +28,8 @@ public class PluginUpdater {
 
     private static final String REPO_URL = "http://plugins.intellij.net";
 
+    private static final int RETRY_COUNT = 3;
+
     private static class FormParam {
         public final boolean isFile;
         public String value;
@@ -46,15 +45,37 @@ public class PluginUpdater {
         }
     }
 
-    private static List<String> loginAndGetOwnPluginsList(HttpClient httpClient, String username, String password) throws IOException {
-        PostMethod m = new PostMethod(REPO_URL + "/space/");
-        m.setFollowRedirects(false);
-        Collection<NameValuePair> postParams = new ArrayList<NameValuePair>();
-        postParams.add(new NameValuePair("action", "login"));
-        postParams.add(new NameValuePair("login", username));
-        postParams.add(new NameValuePair("password", password));
-        m.setRequestBody(postParams.toArray(new NameValuePair[postParams.size()]));
-        int responseCode = httpClient.executeMethod(m);
+    private static interface MethodFactory {
+        HttpMethod createMethod();
+    }
+
+    private static HttpMethod executeWithRetry(HttpClient c, MethodFactory methodFactory) throws IOException {
+        HttpMethod method = null;
+        for (int i = 0; i < RETRY_COUNT; i++) {
+            method = methodFactory.createMethod();
+            method.setFollowRedirects(false);
+            int responseCode = c.executeMethod(method);
+            if (responseCode != HttpStatus.SC_INTERNAL_SERVER_ERROR) {
+                break;
+            }
+        }
+        return method;
+    }
+
+    private static List<String> loginAndGetOwnPluginsList(HttpClient httpClient, final String username, final String password) throws IOException {
+        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+            @Override
+            public HttpMethod createMethod() {
+                PostMethod m = new PostMethod(REPO_URL + "/space/");
+                Collection<NameValuePair> postParams = new ArrayList<NameValuePair>();
+                postParams.add(new NameValuePair("action", "login"));
+                postParams.add(new NameValuePair("login", username));
+                postParams.add(new NameValuePair("password", password));
+                m.setRequestBody(postParams.toArray(new NameValuePair[postParams.size()]));
+                return m;
+            }
+        });
+        int responseCode = m.getStatusCode();
         if (responseCode != HttpStatus.SC_OK) {
             throw new IOException("Request failed with code " + responseCode);
         }
@@ -86,10 +107,15 @@ public class PluginUpdater {
         }
     }
 
-    private static boolean checkPluginExistence(HttpClient httpClient, String pluginId) throws IOException {
-        GetMethod m = new GetMethod(REPO_URL + "/plugin/?id=" + pluginId);
-        m.setFollowRedirects(false);
-        int status = httpClient.executeMethod(m);
+    private static boolean checkPluginExistence(HttpClient httpClient, final String pluginId) throws IOException {
+        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+            @Override
+            public HttpMethod createMethod() {
+                return new GetMethod(REPO_URL + "/plugin/?id=" + pluginId);
+            }
+        });
+
+        int status = m.getStatusCode();
         if (status == HttpStatus.SC_OK) {
             return true;
         }
@@ -101,10 +127,15 @@ public class PluginUpdater {
         }
     }
 
-    private static LinkedHashMap<String, FormParam> readCurrentValues(HttpClient httpClient, String pluginId) throws IOException {
-        GetMethod m = new GetMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
-        m.setFollowRedirects(false);
-        int status = httpClient.executeMethod(m);
+    private static LinkedHashMap<String, FormParam> readCurrentValues(HttpClient httpClient, final String pluginId) throws IOException {
+        HttpMethod m = executeWithRetry(httpClient, new MethodFactory() {
+            @Override
+            public HttpMethod createMethod() {
+                return new GetMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
+            }
+        });
+
+        int status = m.getStatusCode();
         if (status == HttpStatus.SC_OK) {
             return readFormParams(m.getResponseBodyAsStream());
         }
@@ -229,8 +260,8 @@ public class PluginUpdater {
         return valueAttr == null ? null : valueAttr.getNodeValue();
     }
 
-    private static void updatePlugin(HttpClient c, String pluginId, Map<String, FormParam> values) {
-        ArrayList<Part> parts = new ArrayList<Part>();
+    private static void updatePlugin(HttpClient c, final String pluginId, Map<String, FormParam> values) {
+        final ArrayList<Part> parts = new ArrayList<Part>();
         for (Map.Entry<String, FormParam> entry : values.entrySet()) {
             FormParam paramValue = entry.getValue();
             if (paramValue.isFile) {
@@ -258,16 +289,21 @@ public class PluginUpdater {
             }
         }
 
-        PostMethod m = new PostMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
-        m.setFollowRedirects(false);
-        m.setRequestEntity(new MultipartRequestEntity(parts.toArray(new Part[parts.size()]), m.getParams()));
-        int responseCode;
+        HttpMethod m;
         try {
-            responseCode = c.executeMethod(m);
+            m = executeWithRetry(c, new MethodFactory() {
+                @Override
+                public HttpMethod createMethod() {
+                    PostMethod m = new PostMethod(REPO_URL + "/plugin/edit/?pid=" + pluginId);
+                    m.setRequestEntity(new MultipartRequestEntity(parts.toArray(new Part[parts.size()]), m.getParams()));
+                    return m;
+                }
+            });
         }
         catch (IOException e) {
             throw new BuildException("Failed to execute request: " + e.getMessage(), e);
         }
+        int responseCode = m.getStatusCode();
         if (responseCode == HttpStatus.SC_OK) {
             try {
                 Document document = parseHtml(m.getResponseBodyAsStream());
