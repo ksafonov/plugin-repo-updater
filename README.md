@@ -1,4 +1,4 @@
 plugin-repo-uploader
 ====================
 
-Ant task to update JetBrains plugin repository
+ANT task to update plugin at JetBrains plugin repository. Please see build.xml for sample usage.

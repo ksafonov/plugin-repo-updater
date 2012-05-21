@@ -1,0 +1,31 @@
+<project name="Update plugin" default="run">
+    <taskdef name="update-plugin" classname="com.jetbrains.pluginrepo.UpdatePluginTask"/>
+
+    <target name="run">
+        <update-plugin pluginId="99999" username="UUU" password="XXX">
+
+            <!--plugin JAR or ZIP to upload-->
+            <parameter name="file" value="C:\Projects\test-plugin\test-plugin.jar"/>
+
+            <!--screenshot-->
+            <!--<parameter name="screenshots" value=""/>-->
+
+            <!-- Add info to RSS feed and news channels (200 characters): -->
+            <parameter name="notes" value=""/>
+
+            <!-- bug tracker URL -->
+            <parameter name="bugtrackerUrl" value=""/>
+
+            <!-- forum URL -->
+            <parameter name="forumUrl" value=""/>
+
+            <!-- documentation URL -->
+            <parameter name="docUrl" value=""/>
+
+            <!-- general usage instructions-->
+            <parameter name="docText" value=""/>
+
+
+        </update-plugin>
+    </target>
+</project>
