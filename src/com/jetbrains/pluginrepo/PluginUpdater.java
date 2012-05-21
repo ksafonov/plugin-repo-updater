@@ -294,7 +294,7 @@ public class PluginUpdater {
 
     public static void execute(String pluginId, String username, String password, Map<String, String> newValues) {
         HttpClient c = new HttpClient();
-        c.getHostConfiguration().setProxyHost(new ProxyHost("localhost", 8888));
+//        c.getHostConfiguration().setProxyHost(new ProxyHost("localhost", 8888));
         try {
             LOG.info("Checking plugin existence...");
             if (!checkPluginExistence(c, pluginId)) {
