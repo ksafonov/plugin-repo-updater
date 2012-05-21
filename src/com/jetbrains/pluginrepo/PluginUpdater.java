@@ -365,7 +365,7 @@ public class PluginUpdater {
 //            newValues.put("source", "http://sources");
 //            newValues.put("notes", "These are some notes");
             newValues.put("file", "C:\\Projects\\test-plugin\\test-plugin.jar");
-            execute("7014", "ksafonov", "run29hAUls", newValues);
+            execute("99999", "UUU", "XXX", newValues);
         }
         catch (BuildException e) {
             e.printStackTrace();
